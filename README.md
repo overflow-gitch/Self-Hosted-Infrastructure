@@ -1,4 +1,4 @@
-# Homelab Overview
+# Self Hosted Infrastructure Overview
 
 ## Introduction
 
