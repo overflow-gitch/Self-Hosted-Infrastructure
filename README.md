@@ -73,7 +73,7 @@ This architecture prioritizes functionality within existing hardware constraints
 * RAM: 16GB DDR3
 * Storage configuration:
     * 80GB SSD (Boot/OS Drive)
-    * 512GB HDD (unused, potential backup target)
+    * 512GB HDD (backup target pool)
     * 2TB HDD (tank ZFS pool)
 * Network interfaces: 1GbE NIC
 * Role: NAS / file server
@@ -100,6 +100,9 @@ Node A (M920q), being a small-form-factor PC, cannot fit multiple disk drives in
 * Network bridges:
 
   * `vmbr0` (LAN + OPNsense passthrough)
+
+#### Analysis (Backup Integration)
+Node A has no ZFS-backed storage; snapshot-capable backup modes (vzdump `Snapshot` mode) depend on guest disks residing on `local-lvm` (LVM-thin), which supports live snapshots. Guests provisioned on plain `local` storage cannot use Snapshot mode and require `Suspend` or `Stop` mode instead, or migration of their disk to `local-lvm`.
 
 ---
 
@@ -141,7 +144,7 @@ The decision to virtualize OPNsense is primarily informed by hardware constraint
 
 Physical interfaces are directly set for WAN, LAN, and dedicated interfaces for NAS devices and the PVE host itself, VLAN use is restricted to virtual connections between PVE host and OPNsense as inventory stands. In future, all traffic of the host will be routed through PCIe passthrough for better performance and security (as well as reducing the amount of physical infrastructure).
 
-Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab.
+Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab. This single point of failure is mitigated at the VM level via scheduled vzdump backups (see Backup Strategy), a validated restore path exists via restoring the OPNsense VM backup to a new VMID on isolated networking.
 
 Multiple IP subnets are used to logically separate infrastructure, storage, and client services. DHCP, DNS, and firewall policies are configured to allow only the required communication between these networks.
 
@@ -157,20 +160,40 @@ Firewall policies follow a default-deny approach with explicit rules permitting 
 ### TrueNAS (Node B)
 
 * ZFS pools:
-    vdevA = 1x 2tb single disk
+    * `tank` - tb single disk (primary data)
+    * `backup` - 1x 512GB single disk (backup target for VM/container backups and configuration exports)
 * Datasets:
     ```
     tank
     ├── users
     │    ├── user1/
     │    ├── user2/
+
+    backup
+    ├── vm-backups/        (flat; Proxmox vzdump target for all VMs/LXCs)
+    └── config/
+        ├── host/           (Proxmox host config exports)
+        └── service/        (per-service config exports, e.g. opnsense/)
     ```
 * SMB shares:
   * Personal share(s) - tank/users/*
+  * `config-backup` - backup/config (dedicated admin user, guest access disabled, access-based enumeration enabled)
+* NFS shares:
+  * `vm-backups` - backup/vm-backups (export restricted to Node A's IP, maproot user/group set to root/wheel)
 
+#### Dataset Configuration: `backup` pool
+
+| Dataset | Preset | Compression | Recordsize | atime | Quota | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `vm-backups` | Generic | lz4 | 1M | off | ~200GB | Flat structure (no per-VM subdatasets); retention managed via Proxmox backup job "keep" settings rather than ZFS |
+| `config` | Generic | zstd-9 | 128K (default) | off | ~10GB | `host/` and `service/` are plain subdirectories, not sub-datasets |
+
+Checksums left at default on both datasets, this is the primary corruption-detection mechanism given neither pool has vdev-level redundancy.
 
 #### Analysis
-Due to limited disk drives in my inventory, redundancy via RAID is untenable. Since the pool consists of a single disk, the risk of permanent complete data loss exists unless backups are implemented. Replication backup services with unmatched disks will be pursued as an immediate goal.
+Due to limited disk drives, redundancy via RAID is untenable for either pool. Since each pool consists of a single disk, the risk of permanent complete data loss exists unless backups/replication are implemented. Both `tank` and `backup` currently rely on ZFS checksums plus snapshots for corruption/mistake protection only. Neither protects against physical disk failure. Replication backup services with more disks remain a future goal for `tank`.
+
+The `backup` pool is deliberately scoped to VM/container backups and small configuration exports rather than a full replica of `tank`. Since `tank` is expected to exceed 512GB over time, a full mirror of `tank` onto the spare disk is not feasible; user SMB shares (`tank/users/*`) are intentionally excluded from this backup target since client + share already provides a basic two-copy redundancy for that data.
 
 Future datasets for backups, logs, media and application/service data are being considered.
 
@@ -196,17 +219,33 @@ While all user datasets are configured as SMB datasets in TrueNAS, only tank/use
 ### Current State
 
 * TrueNAS snapshots:
-    * tank/users: hourly, 1 month retention, recursive on all child datasets
-* External backup (if any): None
-* VM backups (Proxmox backups or PBS): None
-
+    * `tank/users`: hourly, 1 month retention, recursive on all child datasets
+    * `backup` pool (`vm-backups`, `config`): daily, 2 week retention
+* VM/LXC backups (Proxmox vzdump):
+    * Scheduled backup job configured under Datacenter -> Backup on Node A, targeting the `vm-backups` NFS storage (content type: Backup only (no disk images))
+    * Selection mode: all guests (so new VMs/LXCs are covered automatically without editing the job)
+    * Mode: Snapshot for guests on `local-lvm`; Suspend/Stop required for any guest still on plain `local`
+    * Compression: zstd
+    * Retention: bounded "keep" settings (rather than unlimited) to stay within the ~200GB quota, since vzdump produces full independent archives per run rather than deduplicated increments
+    * Failure notifications configured (email/webhook) so a failed job doesn't go unnoticed
+* OPNsense-specific backup:
+    * No separate config.xml export/push pipeline is maintained at this time. The OPNsense VM's full configuration is already captured as part of its regular vzdump backup.
+    * Restore path: restore the relevant vzdump backup to a new, unused VMID with networking detached/isolated, verify boot and configuration via console (and optionally an isolated management network), then discard the test VM. This has been identified as sufficient for current recovery needs; a lower-effort, faster-access standalone config.xml export was considered (NFS-mount push from OPNsense, or SCP pull via Proxmox) but deprioritized as redundant given the VM-level backup already covers this.
+* External backup (offsite): None, out of scope for now
+* Proxmox host configuration backup (`/etc/pve`, network config, etc.) to `backup/config/host/`: **not yet implemented** planned as a manual script + cron job, still outstanding
+* TrueNAS's own configuration export to `backup/config/host/`: not yet implemented, low priority
+* Cross-pollination (storing small critical config copies on the *other* physical machine, rather than only within Node B): identified as a future improvement, not yet implemented
 
 #### Analysis
-At present, snapshots provide protection against accidental deletion and data corruption, but they do not protect against disk failure or hardware loss.
+The current backup posture is a deliberate tiered approach given fixed hardware (no new spending, no offsite target): critical/replaceable-effort data (VM and container state) is protected via scheduled vzdump backups to a dedicated NFS target, while bulk user data (`tank/users`) is intentionally left out of this backup target and instead relies on existing client+share redundancy plus snapshots against accidental deletion.
 
-User SMB shares are currently intended for shared or replicated data rather than hosting complete user home directories. Given the absence of external backups and storage redundancy, the NAS should not be treated as the sole copy of important user data.
+This still leaves several known gaps, accepted as reasonable trade-offs for now:
+* Both `tank` and `backup` are single, non-redundant disks. A physical failure of either is only survivable if the *other* pool happens to hold a relevant copy (e.g. `backup` surviving a `tank` failure preserves VM/container state, but not user share data)
+* Everything remains on-site: there is no protection against fire, theft, or a simultaneous failure affecting both nodes at once
+* Proxmox host-level configuration (as opposed to guest VM/LXC state) is not yet backed up anywhere
+* OPNsense recovery depends on a full VM restore rather than a lightweight config-only restore; this was an explicit scope decision, accepted as covering the large majority of realistic failure scenarios (disk failure, bad update, misconfiguration) without the added complexity of a second automation pipeline
 
-Future work will focus on implementing VM backups, configuration backups, and an external backup target to achieve protection against hardware failure and accidental data loss.
+Future work will focus on implementing the outstanding Proxmox host-config backup script, and revisiting external/offsite backup and cross-pollination of critical configs once resources allow.
 
 ---
 
@@ -225,7 +264,7 @@ Access to internal services is restricted to trusted networks, with remote acces
 
 The network is logically separated into subnets based on function (e.g., client, storage, and management networks). This provides basic segmentation at Layer 3, although further isolation using VLANs is planned once appropriate switching hardware is available.
 
-Administrative access is restricted to authenticated users using SSH keys and local credentials where required. Network file access is controlled using SMB ACLs at the dataset level, enforcing per-user permissions on shared storage.
+Administrative access is restricted to authenticated users using SSH keys and local credentials where required. Network file access is controlled using SMB ACLs at the dataset level, enforcing per-user permissions on shared storage. The new `config-backup` SMB share follows the same model: a single dedicated admin user, guest access disabled, and access-based enumeration enabled so the share is not casually browsable by other accounts. The `vm-backups` NFS export is similarly scoped, restricted to Node A's IP only rather than the broader LAN.
 
 Overall, the model enforces security through layered controls at the firewall, network, and application levels, with each layer assuming minimal trust in the others.
 
@@ -265,7 +304,7 @@ A future goal is to introduce a centralized identity provider (e.g., Authentik o
 ## Future Expansion Ideas
 
 * Additional Proxmox nodes (cluster)
-* Proxmox Backup Server (PBS)
+* Proxmox Backup Server (PBS) (deduplicated, incremental-forever backups)
 * Kubernetes / container platform
 * Dedicated reverse proxy (e.g., Nginx Proxy Manager / Traefik)
 * Home automation stack (Home Assistant)
@@ -274,15 +313,23 @@ A future goal is to introduce a centralized identity provider (e.g., Authentik o
 * Auth/ID/SSO service (LDAP, AD, OCID)
 * Monitoring/logging centralization services
 * Centralized DBMS
+* Proxmox host configuration backup script (manual scripting, outstanding)
+* TrueNAS configuration export automation
+* Cross-pollination of critical config backups between Node A and Node B
+* Offsite/cloud backup target (explicitly deferred, local-only for now)
 
 ---
 
 ## Known Issues / Limitations
 
 * M920q hardware constraints (RAM, PCIe lanes, etc.)
-* Single point of failure (for both storage and compute)
+* Single point of failure (for both storage and compute), partially mitigated for VM/container state via scheduled vzdump backups to the `backup` pool, but both `tank` and `backup` remain single, non-redundant disks
 * Network bottlenecks
-* Backup gaps
+* Backup gaps:
+    * No offsite/external backup target (accepted trade-off: local-only, no additional spend)
+    * Proxmox host-level configuration not yet backed up (planned, not yet implemented)
+    * TrueNAS's own configuration export not yet automated (low priority)
+    * No cross-pollination of critical config backups between physical machines yet
 * Virtualization section: 
     * Current bridge configuration requires review.
     *  Connectivity between Proxmox and the OPNsense VM is functional but not fully understood.
