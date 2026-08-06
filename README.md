@@ -5,9 +5,10 @@
 This repository documents a modular homelab focused on networking, virtualization, storage, infrastructure and application experimentation. It includes architecture diagrams, configuration decisions, networking layouts, and operational documentation.
 
 The environment is built around a set of core infrastructure components:
-- A Proxmox VE virtualization host running on a Lenovo M920q
-- An OPNsense virtual machine handling routing, firewalling, network segmentation, and other edge services
-- A TrueNAS system (on an Acer TC-220) providing centralized storage via ZFS, and NFS/SMB shares with robust data integrity systems.
+* A Proxmox VE virtualization host running on a Lenovo M920q
+* An OPNsense virtual machine handling routing, firewalling, network segmentation, and other edge services
+* A TrueNAS system (on an Acer TC-220) providing centralized storage via ZFS, and NFS/SMB shares with checksums, snapshots and integrity verification.
+* A Docker App virtual machine handling database management, authentication/identity services, reverse proxies, monitoring and other apps.
 
 The primary purpose of this homelab is to provide a controlled environment for learning/demonstrating infrastructure concepts, testing new technologies, and hosting personal services. It is intentionally designed to be modular, allowing components to be reconfigured or expanded over time.
 
@@ -63,8 +64,8 @@ This architecture prioritizes functionality within existing hardware constraints
 * RAM: 16GB DDR4
 * Storage: 256GB SSD
 * Network interfaces:
-    * nic0: 1x GbE onboard NIC
-    * nic1-nic4: 4x 2.5GbE PCIe NIC
+    * 1x GbE onboard NIC
+    * 4x 2.5GbE PCIe NIC (Intel I226-V), passed through directly to the OPNsense VM via PCIe passthrough
 * Role: virtualization host (PVE)
 
 #### Node B: TC-220 (TrueNAS Node)
@@ -80,12 +81,13 @@ This architecture prioritizes functionality within existing hardware constraints
 
 #### Analysis
 
-Both nodes are refurbished desktop computers with limited resources. This necessitates a specific seperation of roles for computation (CPU + RAM use), networking, and storage.
+Both nodes are refurbished desktop computers with limited resources. This necessitates a specific separation of roles for computation (CPU + RAM use), networking, and storage.
 
-Node B (TC-220) is a full-size desktop with a case and motherboard that can support up to 4 SATA disk drives, and has far weaker computation capacity compared to Node A. Since the qualities of a NAS are more dependent on disk drive quantity, and less on CPU/RAM speed Node B is already optimized compare to Node A
+Node B (TC-220) is a full-size desktop with a case and motherboard that can support up to 4 SATA disk drives, and has far weaker computation capacity compared to Node A. For the expected workload of a storage appliance, Node B is more optimized compared to Node A.
 
 Node A (M920q), being a small-form-factor PC, cannot fit multiple disk drives inside itself, and has much more capable computation performance compared to Node B. Serving as a host for an OPNsense VM on Proxmox VE, it was fitted with a quad-port 2.5GbE PCIe NIC expansion to serve that function, alongside general computation services.
 
+Node A also hosts a second guest VM (the "Docker VM," see Application Layer) alongside OPNsense, reinforcing its role as the general-purpose compute node, with Node B remaining purely storage-focused.
 
 ---
 
@@ -99,10 +101,32 @@ Node A (M920q), being a small-form-factor PC, cannot fit multiple disk drives in
     * `local-lvm` (lvm, local SSD)
 * Network bridges:
 
-  * `vmbr0` (LAN + OPNsense passthrough)
+  * `vmbr0` (LAN, used by the Docker VM and other non-passthrough guests)
+  * OPNsense's WAN/LAN physical ports (Intel I226-V) are passed through directly via PCIe passthrough, bypassing `vmbr0` entirely for those interfaces
 
-#### Analysis (Backup Integration)
-Node A has no ZFS-backed storage; snapshot-capable backup modes (vzdump `Snapshot` mode) depend on guest disks residing on `local-lvm` (LVM-thin), which supports live snapshots. Guests provisioned on plain `local` storage cannot use Snapshot mode and require `Suspend` or `Stop` mode instead, or migration of their disk to `local-lvm`.
+### Guest: OPNsense VM
+* vCPU: 2
+* RAM: 4GB
+* Disk: 16GB
+* Network: WAN/LAN via direct PCIe passthrough of the onboard Intel I226-V ports (see Hardware Inventory), not bridged through `vmbr0`
+
+
+### Guest: Docker VM ("docker-host")
+
+* Base OS: Debian 12 (netinst, minimal, no desktop environment)
+* vCPU: 4
+* RAM: 8GB
+* Disk: 128GB
+* Network: `vmbr0` (LAN), static DHCP reservation on OPNsense
+* Container runtime: Docker CE (official upstream repo, not Debian-packaged), Compose plugin (`docker compose`, not standalone `docker-compose`)
+* Guest agent: `qemu-guest-agent` installed and enabled for clean shutdown/IP reporting to Proxmox
+
+#### Analysis
+The Docker VM was deliberately built as a VM rather than an LXC container, despite Proxmox supporting nested Docker-in-LXC; cgroup/AppArmor interactions and inconsistent systemd support inside LXC make VMs the more predictable and widely-supported path for a Docker host, and preserve a clean failure boundary from OPNsense.
+
+Data placement follows a deliberate split: the orchestration layer (`/opt/docker/<service>/`, containing compose files and small local config/state) stays on the VM's local disk, while only bulk, non-database data (media libraries, documents, photo originals) is bind-mounted from an NFS export on TrueNAS (`tank/appdata`). This avoids two known failure classes: Docker/Compose depending on a not-yet-mounted network share at boot, and NFS's weaker file-locking semantics causing corruption risk for anything with an embedded database.
+
+**Secrets handling (Traefik `.env`, `acme.json`):** these currently remain local to the Docker VM's disk (`/opt/docker/traefik/`) rather than being relocated to an NFS-backed, TrueNAS-encrypted dataset. This was an explicit decision after evaluating the threat model: Node A's disk is unencrypted, but the realistic threat this would protect against (physical theft/extraction of the drive) already implies a scenario severe enough to also compromise Node B, at which point relocating two small secret files provides negligible additional protection relative to the operational cost (new hard dependency of Docker startup on TrueNAS/NFS availability, weaker guarantees around `acme.json`'s periodic rewrite-on-renewal under NFS locking). Lower-cost, higher-value mitigations were applied instead: restrictive file permissions (`chmod 600`), and moving the DuckDNS API token out of container environment variables (visible via `docker inspect`) into a Compose file-based secret. Token rotation remains available as a fast, low-cost response if compromise is ever suspected.
 
 ---
 
@@ -142,9 +166,9 @@ This section's architecture is undergoing experimentation and is not considered 
 
 The decision to virtualize OPNsense is primarily informed by hardware constraints. With the few computers available, it is necessary to have Node A serve as both edge router and general application server, especially since Node B is already a dedicated storage appliance. An additional benefit to virtualizing OPNsense (as well as anything else) on Proxmox is ease of duplicaiton, backups, replication, and reversion of machine state. This improves recovery time by enabling rapid rollback in the event of misconfiguration.
 
-Physical interfaces are directly set for WAN, LAN, and dedicated interfaces for NAS devices and the PVE host itself, VLAN use is restricted to virtual connections between PVE host and OPNsense as inventory stands. In future, all traffic of the host will be routed through PCIe passthrough for better performance and security (as well as reducing the amount of physical infrastructure).
+WAN and LAN are served by physical Intel I226-V ports passed through directly to OPNsense via PCIe passthrough, not bridged through the host; dedicated interfaces for NAS devices and the PVE host itself are handled separately, and VLAN use is restricted to virtual connections between PVE host and OPNsense as inventory stands.
 
-Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab. This single point of failure is mitigated at the VM level via scheduled vzdump backups (see Backup Strategy), a validated restore path exists via restoring the OPNsense VM backup to a new VMID on isolated networking.
+Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab. This single point of failure is mitigated via periodic manual configuration export rather than scheduled automated backup (see Backup Strategy); a validated restore path exists via restoring the exported configuration to a fresh OPNsense install.
 
 Multiple IP subnets are used to logically separate infrastructure, storage, and client services. DHCP, DNS, and firewall policies are configured to allow only the required communication between these networks.
 
@@ -160,44 +184,37 @@ Firewall policies follow a default-deny approach with explicit rules permitting 
 ### TrueNAS (Node B)
 
 * ZFS pools:
-    * `tank` - tb single disk (primary data)
+    * `tank` - 2tb single disk (primary data)
     * `backup` - 1x 512GB single disk (backup target for VM/container backups and configuration exports)
 * Datasets:
     ```
     tank
-    ├── users
-    │    ├── user1/
-    │    ├── user2/
+    └── Appdata
+    └── users
+         ├── user1/
+         └── user2/
+    
 
     backup
-    ├── vm-backups/        (flat; Proxmox vzdump target for all VMs/LXCs)
-    └── config/
-        ├── host/           (Proxmox host config exports)
-        └── service/        (per-service config exports, e.g. opnsense/)
+    ├── config/
+    │   ├── host/           (Proxmox host config exports)
+    │   └── docker/        (per-service config exports, e.g. opnsense/)
+    └── vm-backups/         (flat; Proxmox vzdump target for all VMs/LXCs)
+
     ```
 * SMB shares:
   * Personal share(s) - tank/users/*
-  * `config-backup` - backup/config (dedicated admin user, guest access disabled, access-based enumeration enabled)
+  * `config` - for storing backups of configurations and infrastructure-as-code
 * NFS shares:
-  * `vm-backups` - backup/vm-backups (export restricted to Node A's IP, maproot user/group set to root/wheel)
-
-#### Dataset Configuration: `backup` pool
-
-| Dataset | Preset | Compression | Recordsize | atime | Quota | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| `vm-backups` | Generic | lz4 | 1M | off | ~200GB | Flat structure (no per-VM subdatasets); retention managed via Proxmox backup job "keep" settings rather than ZFS |
-| `config` | Generic | zstd-9 | 128K (default) | off | ~10GB | `host/` and `service/` are plain subdirectories, not sub-datasets |
-
-Checksums left at default on both datasets, this is the primary corruption-detection mechanism given neither pool has vdev-level redundancy.
+  * `appdata` - for storing data that appplications consume (images, media, documents, code, etc.)
+  * `vm-backups` - for storing proxmox's backup data
 
 #### Analysis
-Due to limited disk drives, redundancy via RAID is untenable for either pool. Since each pool consists of a single disk, the risk of permanent complete data loss exists unless backups/replication are implemented. Both `tank` and `backup` currently rely on ZFS checksums plus snapshots for corruption/mistake protection only. Neither protects against physical disk failure. Replication backup services with more disks remain a future goal for `tank`.
+Due to limited, non-uniform-sized disk drives, redundancy via RAID is untenable for either pool. Since each pool consists of a single disk, the risk of permanent complete data loss exists unless backups/replication are implemented. Both `tank` and `backup` currently rely on ZFS checksums plus snapshots for corruption/mistake protection only; neither protects against physical disk failure.
 
 The `backup` pool is deliberately scoped to VM/container backups and small configuration exports rather than a full replica of `tank`. Since `tank` is expected to exceed 512GB over time, a full mirror of `tank` onto the spare disk is not feasible; user SMB shares (`tank/users/*`) are intentionally excluded from this backup target since client + share already provides a basic two-copy redundancy for that data.
 
-Future datasets for backups, logs, media and application/service data are being considered.
-
-Currently, personal user shares are the main use of the NAS. With the only additional feature besides Snapshots enabled is global ZTSD-3 compression.
+Currently, personal user shares are the main use of the NAS. With the only additional feature besides Snapshots enabled is global ZSTD-3 compression.
 
 While all user datasets are configured as SMB datasets in TrueNAS, only tank/users is shared. Access to personal datasets/directories is controlled through SMB Access Control Lists (ACL). While reducing the amount of shares was desired for easier maintainability, there exists a hard requirement to be able to track and restrict individual quotas for each individual user, which is not a native feature of SMB. Therefore, each user requires a manual setup with an individual dataset at the ZFS/block level, rather than setting up something like a "home network" scheme.
 
@@ -207,10 +224,17 @@ While all user datasets are configured as SMB datasets in TrueNAS, only tank/use
 
 ### Currently Running
 
-| Service     | Host      | Description      |
-| ----------- | --------- | ---------------  |
-| OPNsense    | Node A    | Router/firewall  |
-| TrueNAS     | Node B    | storage/backup   |
+| Service     | Host              | Description      |
+| ----------- | ----------------- | ---------------  |
+| OPNsense    | Node A            | Router/firewall  |
+| TrueNAS     | Node B            | storage/backup   |
+| docker-host | Node A (guest VM) | Debian 12 + Docker CE, application/container host |
+| Traefik     | docker-host        | Reverse proxy, TLS termination, DuckDNS DNS-01 wildcard cert (Let's Encrypt), Docker-label-driven routing |
+| postgres     | docker-host        | centralized dbms |
+| redis     | docker-host        | centralized redis storage |
+| Authentik     | docker-host        | robust SSO Auth/ID server |
+| Other Services     | any (docker preferred)       | Other services running that don't affect design decsions. Unless otherwise constrained, these should run on docker for ease of Creation/Deletion, availability of images and familiarity reasons. |
+
 
 ---
 
@@ -220,32 +244,31 @@ While all user datasets are configured as SMB datasets in TrueNAS, only tank/use
 
 * TrueNAS snapshots:
     * `tank/users`: hourly, 1 month retention, recursive on all child datasets
-    * `backup` pool (`vm-backups`, `config`): daily, 2 week retention
+    * `backup` pool (`vm-backups`, `config`): daily, 2 week retention; protects the backup target itself from an accidental overwrite or bad backup run clobbering the last good copy
 * VM/LXC backups (Proxmox vzdump):
-    * Scheduled backup job configured under Datacenter -> Backup on Node A, targeting the `vm-backups` NFS storage (content type: Backup only (no disk images))
-    * Selection mode: all guests (so new VMs/LXCs are covered automatically without editing the job)
+    * Scheduled backup job configured under Datacenter → Backup on Node A, targeting the `vm-backups` NFS storage (content type: Backup only (no disk images))
+    * Selection mode: all guests except OPNsense (see OPNsense-specific backup below for the reason this guest is excluded)
     * Mode: Snapshot for guests on `local-lvm`; Suspend/Stop required for any guest still on plain `local`
     * Compression: zstd
     * Retention: bounded "keep" settings (rather than unlimited) to stay within the ~200GB quota, since vzdump produces full independent archives per run rather than deduplicated increments
     * Failure notifications configured (email/webhook) so a failed job doesn't go unnoticed
 * OPNsense-specific backup:
-    * No separate config.xml export/push pipeline is maintained at this time. The OPNsense VM's full configuration is already captured as part of its regular vzdump backup.
-    * Restore path: restore the relevant vzdump backup to a new, unused VMID with networking detached/isolated, verify boot and configuration via console (and optionally an isolated management network), then discard the test VM. This has been identified as sufficient for current recovery needs; a lower-effort, faster-access standalone config.xml export was considered (NFS-mount push from OPNsense, or SCP pull via Proxmox) but deprioritized as redundant given the VM-level backup already covers this.
-* External backup (offsite): None, out of scope for now
-* Proxmox host configuration backup (`/etc/pve`, network config, etc.) to `backup/config/host/`: **not yet implemented** planned as a manual script + cron job, still outstanding
-* TrueNAS's own configuration export to `backup/config/host/`: not yet implemented, low priority
-* Cross-pollination (storing small critical config copies on the *other* physical machine, rather than only within Node B): identified as a future improvement, not yet implemented
+    * Automated vzdump backups of this VM are disabled. Scheduled backup runs were found to reliably freeze LAN-side connectivity homelab-wide, recoverable only via a full power cycle of Node A; see Virtualization Layer (Guest: OPNsense VM) and Known Issues for the suspected cause.
+    * Backup method: manual, encrypted `config.xml` export via OPNsense's System → Configuration → Backups page, performed whenever a meaningful rule/interface/service change is made, stored in `backup/config/service/opnsense/` via the `config-backup` SMB share
+    * OPNsense's built-in in-GUI configuration history (auto-versioned on every change) serves as a secondary backstop between manual exports
+    * Restore path: fresh OPNsense install, import the exported `config.xml`
+* External backup (offsite): None, explicitly out of scope for now (local-only, budget issues)
 
 #### Analysis
 The current backup posture is a deliberate tiered approach given fixed hardware (no new spending, no offsite target): critical/replaceable-effort data (VM and container state) is protected via scheduled vzdump backups to a dedicated NFS target, while bulk user data (`tank/users`) is intentionally left out of this backup target and instead relies on existing client+share redundancy plus snapshots against accidental deletion.
 
-This still leaves several known gaps, accepted as reasonable trade-offs for now:
-* Both `tank` and `backup` are single, non-redundant disks. A physical failure of either is only survivable if the *other* pool happens to hold a relevant copy (e.g. `backup` surviving a `tank` failure preserves VM/container state, but not user share data)
-* Everything remains on-site: there is no protection against fire, theft, or a simultaneous failure affecting both nodes at once
-* Proxmox host-level configuration (as opposed to guest VM/LXC state) is not yet backed up anywhere
-* OPNsense recovery depends on a full VM restore rather than a lightweight config-only restore; this was an explicit scope decision, accepted as covering the large majority of realistic failure scenarios (disk failure, bad update, misconfiguration) without the added complexity of a second automation pipeline
+OPNsense is deliberately excluded from the automated vzdump job despite its disk now residing on `local-lvm` (which would permit Snapshot-mode backups without a guest pause/restart). This is a conservative choice: the suspected root cause (guest pause/restart during backup colliding with the passed-through I226-V NIC's driver/power-management behavior) is well-evidenced but not formally confirmed, and the cost of being wrong is a homelab-wide LAN outage. Manual `config.xml` export was judged sufficient given how infrequently OPNsense's rules and interface list actually change, at the cost of losing OS-level (as opposed to configuration-level) recovery for this guest.
 
-Future work will focus on implementing the outstanding Proxmox host-config backup script, and revisiting external/offsite backup and cross-pollination of critical configs once resources allow.
+This still leaves several known gaps, accepted as reasonable trade-offs for now:
+* Both `tank` and `backup` are single, non-redundant disks; a physical failure of either is only survivable if the *other* pool happens to hold a relevant copy (e.g. `backup` surviving a `tank` failure preserves VM/container state, but not user share data)
+* Everything remains on-site; there is no protection against fire, theft, or a simultaneous failure affecting both nodes at once
+* Proxmox host-level configuration (as opposed to guest VM/LXC state) is not yet backed up anywhere
+* OPNsense recovery depends on a configuration-only restore to a freshly installed VM rather than a full VM-state restore; this trades away OS-level recovery (installed packages, plugin versions, manual OS-level tweaks) in exchange for avoiding the backup-triggered network outage described above
 
 ---
 
@@ -262,9 +285,11 @@ The security model is based on a default-deny posture, where all network communi
 
 Access to internal services is restricted to trusted networks, with remote access only available through a WireGuard VPN endpoint on OPNsense. This prevents direct exposure of internal services to the WAN interface.
 
-The network is logically separated into subnets based on function (e.g., client, storage, and management networks). This provides basic segmentation at Layer 3, although further isolation using VLANs is planned once appropriate switching hardware is available.
+The network is logically separated into subnets based on function (e.g., client, storage, and management networks). This provides basic segmentation at Layer 3; further isolation using VLANs requires additional switching hardware not currently in place.
 
 Administrative access is restricted to authenticated users using SSH keys and local credentials where required. Network file access is controlled using SMB ACLs at the dataset level, enforcing per-user permissions on shared storage. The new `config-backup` SMB share follows the same model: a single dedicated admin user, guest access disabled, and access-based enumeration enabled so the share is not casually browsable by other accounts. The `vm-backups` NFS export is similarly scoped, restricted to Node A's IP only rather than the broader LAN.
+
+The most obvious problem might be the lack of encryption-at-rest that Node A has, since Node A assumes router duty, instant reboot and assumption of that duty is paramount. This tradeoff does make the homelab more vulnerable to physical theft. However, that threat is deemed as not very likely in my defined threat model.
 
 Overall, the model enforces security through layered controls at the firewall, network, and application levels, with each layer assuming minimal trust in the others.
 
@@ -272,7 +297,8 @@ Overall, the model enforces security through layered controls at the firewall, n
 
 ## Identity & Access
 
-* User management method (local, with future use of SSO servers)
+* Authentik SSO (OIDC preferred, LDAP and corporate account integration considered for experimentation)
+* User management method (local)
 * SMB authentication model: local, NFSv4 permissions
 * Admin access approach: 
     * Primary: ssh keys, VPN admin connection on trusted device
@@ -280,15 +306,49 @@ Overall, the model enforces security through layered controls at the firewall, n
 
 
 #### Analysis
-User management is currently handled using local accounts on TrueNAS, with access restricted to SMB shares through per-user permissions. This provides basic isolation but does not yet implement centralized identity management across services.
+Many services will use Authentik SSO to onboard and manage access and users to most services. This move simplifies access management and setup of accounts greatly. This will be how most users register and log into services. Admin/root accounts will still have a local account for redundancy/emergency reasons.
 
-On Proxmox, administrative access is separated from the root account by using a dedicated admin user, following standard Linux privilege separation practices. On TrueNAS, this separation is handled automatically during setup.
+User-facing applications primarily authenticate through Authentik using OIDC where supported. Infrastructure services (Proxmox, TrueNAS, OPNsense, Docker host, PostgreSQL, Redis and Authentik itself) intentionally remain locally administered and do not depend on centralized identity for emergency access.
+
+Administrative access is separated from the root account by using a dedicated admin user, following standard Linux privilege separation practices. This practice is consistent on all Operating Systems in the homelab.
 
 Administrative access is primarily performed via SSH key authentication over VPN-protected connections from trusted devices. Local password authentication is retained as a fallback mechanism to ensure recovery in cases where higher-level systems (such as VPN or identity services) are unavailable.
 
-This reflects a layered access model where authentication exists at multiple levels (network, system, and service), with no single dependency required for emergency access.
+This separation ensures that loss of the identity provider cannot prevent recovery of the infrastructure hosting it.
 
-A future goal is to introduce a centralized identity provider (e.g., Authentik or similar) to support unified authentication across services. This would enable features such as MFA and passkey-based authentication, while simplifying user lifecycle management. However, integration depends on platform compatibility; TrueNAS supports LDAP and Active Directory integration, while OIDC support varies by service.
+---
+
+## Application Layer
+
+### Docker VM ("docker-host")
+
+See Virtualization Layer for guest specs. Directory convention:
+
+```
+/opt/docker/      
+├── <service>/
+│   ├── compose.yml
+│   └── data/               
+...
+```
+
+Host Access: SSH, key-based only (Ed25519), password auth and root login disabled at `sshd_config` level.
+
+### Reverse Proxy: Traefik
+
+* Version: v3.7 (pinned to minor; current stable as of deployment)
+* TLS: Let's Encrypt via DNS-01 challenge against DuckDNS, wildcard certificate (`*.<domain>.duckdns.org` + bare domain) issued once and reused by every subsequent service's router labels
+* Routing: Docker label-driven (`providers.docker`, `exposedbydefault=false`; services must opt in explicitly)
+* DNS-01 propagation check pinned to public resolvers (1.1.1.1, 8.8.8.8) rather than the container's default resolver, since the LAN's Unbound resolver has a split-DNS override redirecting the domain to internal IPs; this override was intercepting/breaking the ACME challenge's TXT record lookup when using the default resolution path
+
+#### Analysis
+DuckDNS's DNS API only supports a single TXT record per account (tied to the base domain), which rules out issuing individual per-subdomain certificates; the wildcard-cert approach was adopted specifically to match this constraint, and has the added benefit that no further ACME requests are needed as new services are added behind Traefik.
+
+Split-DNS (an internal override pointing the domain at LAN IPs, configured for convenient LAN-side access without hairpin NAT) directly conflicted with ACME's DNS-01 propagation check, since Traefik's default DNS resolution path ran through the same overridden resolver. Explicitly pinning the ACME propagation check to external public resolvers resolved this without having to remove the LAN-side override.
+
+Version pinning matters here: an initially-deployed older Traefik release (v3.1) failed outright against Node A's current Docker Engine release due to a Docker API version negotiation incompatibility in Traefik's bundled client library; resolved by moving to current-minor Traefik (v3.7) rather than working around it with a forced API version alone.
+
+Compose files are treated as version-controlled infrastructure (safe to commit to a git repository); `.env` and `letsencrypt/acme.json` are explicitly excluded via `.gitignore` and remain local-only, since they hold the DuckDNS API token and the wildcard certificate's private key respectively.
 
 ---
 
@@ -306,34 +366,38 @@ A future goal is to introduce a centralized identity provider (e.g., Authentik o
 * Additional Proxmox nodes (cluster)
 * Proxmox Backup Server (PBS) (deduplicated, incremental-forever backups)
 * Kubernetes / container platform
-* Dedicated reverse proxy (e.g., Nginx Proxy Manager / Traefik)
+* Application services behind Traefik: SSO/identity provider (Authentik), Vaultwarden, git server, Jellyfin, music app, book app, documents app, *arr stack, monitoring/logging (Prometheus, Grafana, Loki), homepage/dashboard, Immich, knowledge base app, shared database, container management UI (Portainer or similar, if a dashboard becomes worthwhile at higher service counts)
 * Home automation stack (Home Assistant)
 * VLAN expansion (IoT isolation, guest network)
 * 10GbE upgrade between nodes
-* Auth/ID/SSO service (LDAP, AD, OCID)
 * Monitoring/logging centralization services
-* Centralized DBMS
-* Proxmox host configuration backup script (manual scripting, outstanding)
+* Proxmox host configuration backup script (manual scripting)
 * TrueNAS configuration export automation
 * Cross-pollination of critical config backups between Node A and Node B
 * Offsite/cloud backup target (explicitly deferred, local-only for now)
+* Replication/redundancy for `tank` (currently single, non-redundant disk)
+* Bridge topology redesign on Node A for simpler, more predictable Proxmox/OPNsense connectivity
 
 ---
 
 ## Known Issues / Limitations
 
 * M920q hardware constraints (RAM, PCIe lanes, etc.)
-* Single point of failure (for both storage and compute), partially mitigated for VM/container state via scheduled vzdump backups to the `backup` pool, but both `tank` and `backup` remain single, non-redundant disks
+* Single point of failure (for both storage and compute); partially mitigated for VM/container state via scheduled vzdump backups to the `backup` pool, but both `tank` and `backup` remain single, non-redundant disks
 * Network bottlenecks
 * Backup gaps:
     * No offsite/external backup target (accepted trade-off: local-only, no additional spend)
-    * Proxmox host-level configuration not yet backed up (planned, not yet implemented)
+    * Proxmox host-level configuration not yet backed up
     * TrueNAS's own configuration export not yet automated (low priority)
     * No cross-pollination of critical config backups between physical machines yet
 * Virtualization section: 
     * Current bridge configuration requires review.
-    *  Connectivity between Proxmox and the OPNsense VM is functional but not fully understood.
-    * Planned redesign to simplify bridge topology and improve predictability.
-
+    * Connectivity between Proxmox and the OPNsense VM is functional but not fully understood.
+* Networking / hardware:
+    * OPNsense's passed-through Intel I226-V NIC has been observed to hang homelab-wide LAN connectivity when a scheduled vzdump backup pauses/restarts the guest, recoverable only via a full power cycle of Node A; root cause suspected but not formally confirmed (see Virtualization Layer, Guest: OPNsense VM). Automated vzdump for this guest is disabled pending resolution.
+    * OPNsense's default RAM-disk logging meant the local logs from the initial occurrence of this issue did not survive the power cycle; RAM-disk logging for `/var` has since been disabled so future occurrences leave a persistent trail.
+* Application layer:
+    * Traefik's `.env` (DuckDNS token) and `acme.json` (wildcard cert private key) remain on Node A's unencrypted local disk rather than an encrypted TrueNAS-backed export (accepted trade-off, see Application Layer analysis); mitigated via file permissions and removing the token from `docker inspect` visibility
+    
 
 ---
