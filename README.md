@@ -233,6 +233,7 @@ While all user datasets are configured as SMB datasets in TrueNAS, only tank/use
 | postgres     | docker-host        | centralized dbms |
 | redis     | docker-host        | centralized redis storage |
 | Authentik     | docker-host        | robust SSO Auth/ID server |
+| monitoring-stack | docker-host | Loki, Promtail, Grafana, Prometheus, and exporters |
 | Other Services     | any (docker preferred)       | Other services running that don't affect design decsions. Unless otherwise constrained, these should run on docker for ease of Creation/Deletion, availability of images and familiarity reasons. |
 
 
@@ -377,6 +378,7 @@ Compose files are treated as version-controlled infrastructure (safe to commit t
 * Offsite/cloud backup target (explicitly deferred, local-only for now)
 * Replication/redundancy for `tank` (currently single, non-redundant disk)
 * Bridge topology redesign on Node A for simpler, more predictable Proxmox/OPNsense connectivity
+* design and implement a backup scheme for the application layer. 
 
 ---
 
@@ -399,5 +401,4 @@ Compose files are treated as version-controlled infrastructure (safe to commit t
 * Application layer:
     * Traefik's `.env` (DuckDNS token) and `acme.json` (wildcard cert private key) remain on Node A's unencrypted local disk rather than an encrypted TrueNAS-backed export (accepted trade-off, see Application Layer analysis); mitigated via file permissions and removing the token from `docker inspect` visibility
     
-
 ---
