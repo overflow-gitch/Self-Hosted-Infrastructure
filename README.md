@@ -367,11 +367,9 @@ Compose files are treated as version-controlled infrastructure (safe to commit t
 * Additional Proxmox nodes (cluster)
 * Proxmox Backup Server (PBS) (deduplicated, incremental-forever backups)
 * Kubernetes / container platform
-* Application services behind Traefik: SSO/identity provider (Authentik), Vaultwarden, git server, Jellyfin, music app, book app, documents app, *arr stack, monitoring/logging (Prometheus, Grafana, Loki), homepage/dashboard, Immich, knowledge base app, shared database, container management UI (Portainer or similar, if a dashboard becomes worthwhile at higher service counts)
 * Home automation stack (Home Assistant)
 * VLAN expansion (IoT isolation, guest network)
 * 10GbE upgrade between nodes
-* Monitoring/logging centralization services
 * Proxmox host configuration backup script (manual scripting)
 * TrueNAS configuration export automation
 * Cross-pollination of critical config backups between Node A and Node B
