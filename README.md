@@ -10,13 +10,13 @@ The environment is built around a set of core infrastructure components:
 * A TrueNAS system (on an Acer TC-220) providing centralized storage via ZFS, and NFS/SMB shares with checksums, snapshots and integrity verification.
 * A Docker App virtual machine handling database management, authentication/identity services, reverse proxies, monitoring and other apps.
 
-The primary purpose of this homelab is to provide a controlled environment for learning/demonstrating infrastructure concepts, testing new technologies, and hosting personal services. It is intentionally designed to be modular, allowing components to be reconfigured or expanded over time.
+The primary purpose of this homelab is to provide a controlled environment for learning/demonstrating systems administration concepts, testing new technologies, and hosting personal services. It is intentionally designed to be modular, allowing components to be reconfigured or expanded over time.
 
 ---
 
 ## Design Principles
-* Prefer simplicity over over-engineering
-* Separate compute and storage roles where possible
+* less is more, systems should exist for a reason
+* Separate and isolate roles whenever possible (storage and edge should be seperate)
 * Use virtualization to maximize hardware utilization
 * Avoid exposing internal services directly to WAN
 * Incrementally improve infrastructure over full redesigns
@@ -25,30 +25,32 @@ The primary purpose of this homelab is to provide a controlled environment for l
 
 ## Current Architecture
 
-### High-Level Topology
+### High-Level Network Topology
 
 ```mermaid
 graph TD
     Internet --> ISP["ISP Gateway / Router (Double NAT)"]
 
-    ISP --> OPNsense["OPNsense VM - Routing / Firewall / VPN"]
+    ISP <--> OPNsense["OPNsense VM - Routing / Firewall / VPN"]
 
-    OPNsense --> LAN["LAN Segment - Flat Layer 2"]
+    OPNsense <--> LAN["LAN Segment - Flat Layer 2"]
 
-    LAN --> Proxmox["Proxmox VE Host (Lenovo M920q)"]
-    LAN --> TrueNAS["TrueNAS (Acer TC-220)"]
-    LAN --> WiredClients["Wired Clients"]
+    LAN <--> Proxmox["Proxmox VE Host (Lenovo M920q)"]
+    LAN <--> TrueNAS["TrueNAS (Acer TC-220)"]
+    LAN <--> WiredClients["Wired Clients"]
 
-    ISP --> WiFi["ISP Wireless Network (unconfigurable)"]
+    LAN <--> Docker["Docker Guest (Debian)"]
+
+    ISP --> WiFi["ISP Wireless AP (unconfigurable)"]
     WiFi --> WirelessClients["Wireless Clients"]
 
     WirelessClients --> VPN["WireGuard VPN Tunnel via OPNsense"]
     VPN --> OPNsense
 ```
 #### Analysis
-This network design is the result of dealing with several constraints. The homelab intentionally favors incremental improvements over a complete redesign. New components are introduced only when they solve an existing limitation rather than for the sake of complexity.
+This network design is the result of dealing with several constraints.
 
-The first is a lack of a proper wireless access point (AP). The ISP's given router and AP are proprietary devices with an extreme lack of transparent options and capabilities which my homelab will rely on, leaving my own homelab without wireless capabilities. Wireless clients remain connected to the ISP-managed network, which is isolated from the homelab LAN. WireGuard provides authenticated access to internal services without exposing them directly to the Internet and also allows secure remote access when away from home.
+The first is a split-network between wired and wireless clients. The ISP's given router and AP are proprietary devices with an extreme lack of transparent options and capabilities that my homelab could rely on, leaving my own homelab without wireless capabilities. Wireless clients remain connected to the ISP-managed network, which is isolated from the homelab LAN. WireGuard provides authenticated access to internal services without exposing them directly to the Internet and also allows secure remote access when away from home.
 
 The second issue is a lack of a managed switch. Without proper VLAN support, all trusted devices reside on a single Layer-2 broadcast domain. This simplifies the current deployment but limits network segmentation, prevents isolation of infrastructure and storage traffic, and reduces flexibility for future expansion.
 
@@ -189,7 +191,7 @@ Firewall policies follow a default-deny approach with explicit rules permitting 
 * Datasets:
     ```
     tank
-    └── Appdata
+    └── data
     └── users
          ├── user1/
          └── user2/
@@ -206,7 +208,7 @@ Firewall policies follow a default-deny approach with explicit rules permitting 
   * Personal share(s) - tank/users/*
   * `config` - for storing backups of configurations and infrastructure-as-code
 * NFS shares:
-  * `appdata` - for storing data that appplications consume (images, media, documents, code, etc.)
+  * `data` - for storing data that appplications consume (images, media, documents, code, etc.)
   * `vm-backups` - for storing proxmox's backup data
 
 #### Analysis
@@ -216,7 +218,7 @@ The `backup` pool is deliberately scoped to VM/container backups and small confi
 
 Currently, personal user shares are the main use of the NAS. With the only additional feature besides Snapshots enabled is global ZSTD-3 compression.
 
-While all user datasets are configured as SMB datasets in TrueNAS, only tank/users is shared. Access to personal datasets/directories is controlled through SMB Access Control Lists (ACL). While reducing the amount of shares was desired for easier maintainability, there exists a hard requirement to be able to track and restrict individual quotas for each individual user, which is not a native feature of SMB. Therefore, each user requires a manual setup with an individual dataset at the ZFS/block level, rather than setting up something like a "home network" scheme.
+While all user datasets are configured as SMB datasets in TrueNAS, only tank/users is shared via SMB. Access to personal datasets/directories is controlled through SMB Access Control Lists (ACL). While reducing the amount of shares was desired for easier maintainability, there exists a hard requirement to be able to track and restrict individual quotas for each individual user, which is not a native feature of SMB. Therefore, each user requires a manual setup with an individual dataset at the ZFS/block level, rather than setting up something like a "home network" scheme.
 
 ---
 
@@ -307,15 +309,19 @@ Overall, the model enforces security through layered controls at the firewall, n
 
 
 #### Analysis
-Many services will use Authentik SSO to onboard and manage access and users to most services. This move simplifies access management and setup of accounts greatly. This will be how most users register and log into services. Admin/root accounts will still have a local account for redundancy/emergency reasons.
+Many services will use Authentik SSO to onboard and manage access and users to most services. This move simplifies access management and setup of accounts greatly. This is ideal, as it reduces the amount of management and complexity in administering users, permisisons and user security concerns. Admin/root accounts will still have a local account for redundancy/emergency reasons.
 
-User-facing applications primarily authenticate through Authentik using OIDC where supported. Infrastructure services (Proxmox, TrueNAS, OPNsense, Docker host, PostgreSQL, Redis and Authentik itself) intentionally remain locally administered and do not depend on centralized identity for emergency access.
+The main method of utilizing Authentik is as forward-auth in conjuction with a reverse-proxy (traefik), with services being handed credentials by Authentik for account creation and login, including for services/pages that do not have any login capabilities. The reasoning behind this is for 
+
+User-facing applications primarily authenticate through Authentik using OIDC where supported. Infrastructure services (Proxmox, TrueNAS, OPNsense, Docker host, PostgreSQL, Redis and Authentik itself) intentionally remain locally administered and do not depend on centralized identity for administration or emergencies.
 
 Administrative access is separated from the root account by using a dedicated admin user, following standard Linux privilege separation practices. This practice is consistent on all Operating Systems in the homelab.
 
 Administrative access is primarily performed via SSH key authentication over VPN-protected connections from trusted devices. Local password authentication is retained as a fallback mechanism to ensure recovery in cases where higher-level systems (such as VPN or identity services) are unavailable.
 
 This separation ensures that loss of the identity provider cannot prevent recovery of the infrastructure hosting it.
+
+Limitations among certain native clients for services such as Navidrome and Nextcloud make using SSO impossible. For example: Navidrome relies on its own api that is incapable of handing off authentication. Nextcloud's mobile app technically allows for browser handoff but is extremely unreliable and unpredictable in it's OIDC implementation. These services must use local accounts, without any use from authentik.
 
 ---
 
@@ -377,6 +383,7 @@ Compose files are treated as version-controlled infrastructure (safe to commit t
 * Replication/redundancy for `tank` (currently single, non-redundant disk)
 * Bridge topology redesign on Node A for simpler, more predictable Proxmox/OPNsense connectivity
 * design and implement a backup scheme for the application layer. 
+* Setting up MFA with Authentik.
 
 ---
 
