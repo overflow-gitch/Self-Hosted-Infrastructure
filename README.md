@@ -267,6 +267,8 @@ The current backup posture is a deliberate tiered approach given fixed hardware 
 
 OPNsense is excluded from automated vzdump jobs. The vzdump job interrupts the router's VM, which causes a network outage and a subsequent job failure. Instead of a VM backup, manual backups of the OPNsense configuration are performed whenever changes are made to the router configuration. This is considered acceptable since a well configured router should not change unless manually intervened and state data such as logs and graphs are to be offloaded to a dedicated monitoring stack.
 
+Fortunately, in the event of OPNsense going down, a simple cable switch from the OPNsense router ports to the ISP router will re-establish networking for the household while restoration is in progress. 
+
 This still leaves several known gaps, accepted as reasonable trade-offs for now:
 * Both `tank` and `backup` are single, non-redundant disks; a physical failure of either is only survivable if the *other* pool happens to hold a relevant copy (e.g. `backup` surviving a `tank` failure preserves VM/container state, but not user share data)
 * Everything remains on-site; there is no protection against fire, theft, or a simultaneous failure affecting both nodes at once
@@ -321,7 +323,7 @@ Administrative access is primarily performed via SSH key authentication over VPN
 
 This separation ensures that loss of the identity provider cannot prevent recovery of the infrastructure hosting it.
 
-Limitations among certain native clients for services such as Navidrome and Nextcloud make using SSO impossible. For example: Navidrome relies on its own api that is incapable of handing off authentication. Nextcloud's mobile app technically allows for browser handoff but is extremely unreliable and unpredictable in it's OIDC implementation. These services must use local accounts, without any use from authentik.
+Limitations among certain native clients for services such as Navidrome and Nextcloud make using SSO impossible. For example: Navidrome relies on its own api that is incapable of handing off authentication. Nextcloud's mobile app technically allows for browser handoff but is extremely unreliable and unpredictable when returning from the browser to the app. These services must use local accounts, without any use from authentik.
 
 ---
 
@@ -341,22 +343,6 @@ See Virtualization Layer for guest specs. Directory convention:
 
 Host Access: SSH, key-based only (Ed25519), password auth and root login disabled at `sshd_config` level.
 
-### Reverse Proxy: Traefik
-
-* Version: v3.7 (pinned to minor; current stable as of deployment)
-* TLS: Let's Encrypt via DNS-01 challenge against DuckDNS, wildcard certificate (`*.<domain>.duckdns.org` + bare domain) issued once and reused by every subsequent service's router labels
-* Routing: Docker label-driven (`providers.docker`, `exposedbydefault=false`; services must opt in explicitly)
-* DNS-01 propagation check pinned to public resolvers (1.1.1.1, 8.8.8.8) rather than the container's default resolver, since the LAN's Unbound resolver has a split-DNS override redirecting the domain to internal IPs; this override was intercepting/breaking the ACME challenge's TXT record lookup when using the default resolution path
-
-#### Analysis
-DuckDNS's DNS API only supports a single TXT record per account (tied to the base domain), which rules out issuing individual per-subdomain certificates; the wildcard-cert approach was adopted specifically to match this constraint, and has the added benefit that no further ACME requests are needed as new services are added behind Traefik.
-
-Split-DNS (an internal override pointing the domain at LAN IPs, configured for convenient LAN-side access without hairpin NAT) directly conflicted with ACME's DNS-01 propagation check, since Traefik's default DNS resolution path ran through the same overridden resolver. Explicitly pinning the ACME propagation check to external public resolvers resolved this without having to remove the LAN-side override.
-
-Version pinning matters here: an initially-deployed older Traefik release (v3.1) failed outright against Node A's current Docker Engine release due to a Docker API version negotiation incompatibility in Traefik's bundled client library; resolved by moving to current-minor Traefik (v3.7) rather than working around it with a forced API version alone.
-
-Compose files are treated as version-controlled infrastructure (safe to commit to a git repository); `.env` and `letsencrypt/acme.json` are explicitly excluded via `.gitignore` and remain local-only, since they hold the DuckDNS API token and the wildcard certificate's private key respectively.
-
 ---
 
 ## Maintenance
@@ -365,6 +351,7 @@ Compose files are treated as version-controlled infrastructure (safe to commit t
     * PVE: monthly, manual
     * TrueNAS: monthly, manual
     * OPNsense: nightly, automatic
+    * Docker Guest: when necessary, manual
 
 ---
 
@@ -399,10 +386,9 @@ Compose files are treated as version-controlled infrastructure (safe to commit t
     * No cross-pollination of critical config backups between physical machines yet
 * Virtualization section: 
     * Current bridge configuration requires review.
-    * Connectivity between Proxmox and the OPNsense VM is functional but not fully understood.
+    * Connectivity between Proxmox and the OPNsense VM is functional but not ideal, requiring a physical connection between the PVE host port and a port controlled by OPNsense guest. Ideally, all proxmox host connections would go through a virtual bridge into the OPNsense guest, without the need for a wire. This would help with speed and reduce physical wire clutter.
 * Networking / hardware:
-    * OPNsense's passed-through Intel I226-V NIC has been observed to hang homelab-wide LAN connectivity when a scheduled vzdump backup pauses/restarts the guest, recoverable only via a full power cycle of Node A; root cause suspected but not formally confirmed (see Virtualization Layer, Guest: OPNsense VM). Automated vzdump for this guest is disabled pending resolution.
-    * OPNsense's default RAM-disk logging meant the local logs from the initial occurrence of this issue did not survive the power cycle; RAM-disk logging for `/var` has since been disabled so future occurrences leave a persistent trail.
+    * Automated OPNsense VM backups are intentionally disabled because testing showed that the backup operation causes a network-wide outage and prevents the backup from completing reliably.
 * Application layer:
     * Traefik's `.env` (DuckDNS token) and `acme.json` (wildcard cert private key) remain on Node A's unencrypted local disk rather than an encrypted TrueNAS-backed export (accepted trade-off, see Application Layer analysis); mitigated via file permissions and removing the token from `docker inspect` visibility
     
