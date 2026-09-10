@@ -153,7 +153,7 @@ Role: Edge firewall/router
 * DHCP: Dnsmasq DHCP
 * DNS resolver: Unbound DNS
 * VPN: WireGuard 
-* Dynamic DNS: os-ddclient (client plugin), DuckDNS (server/service)
+* Dynamic DNS: os-ddclient (client plugin), DuckDNS (service)
 
 #### Firewall Policy Summary
 
@@ -166,11 +166,11 @@ Role: Edge firewall/router
 #### Analysis
 This section's architecture is undergoing experimentation and is not considered final, specifically the connection between PVE host and OPNsense.
 
-The decision to virtualize OPNsense is primarily informed by hardware constraints. With the few computers available, it is necessary to have Node A serve as both edge router and general application server, especially since Node B is already a dedicated storage appliance. An additional benefit to virtualizing OPNsense (as well as anything else) on Proxmox is ease of duplicaiton, backups, replication, and reversion of machine state. This improves recovery time by enabling rapid rollback in the event of misconfiguration.
+The decision to virtualize OPNsense is primarily informed by hardware constraints. With the few computers available, it is necessary to have Node A serve as both edge router and general application server, especially since Node B is already a dedicated storage appliance.
 
 WAN and LAN are served by physical Intel I226-V ports passed through directly to OPNsense via PCIe passthrough, not bridged through the host; dedicated interfaces for NAS devices and the PVE host itself are handled separately, and VLAN use is restricted to virtual connections between PVE host and OPNsense as inventory stands.
 
-Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab. This single point of failure is mitigated via periodic manual configuration export rather than scheduled automated backup (see Backup Strategy); a validated restore path exists via restoring the exported configuration to a fresh OPNsense install.
+Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab.
 
 Multiple IP subnets are used to logically separate infrastructure, storage, and client services. DHCP, DNS, and firewall policies are configured to allow only the required communication between these networks.
 
