@@ -14,6 +14,11 @@ The primary purpose of this homelab is to provide a controlled environment for l
 
 ---
 
+## Repo Architecture
+ * `compose/` - Infrastructure as Code (IaC) in the form of compose files, env examples, and configurations. 
+
+---
+
 ## Design Principles
 * less is more, systems should exist for a reason
 * Separate and isolate roles whenever possible (storage and edge should be seperate)

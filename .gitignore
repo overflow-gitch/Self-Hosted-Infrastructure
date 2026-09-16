@@ -1,0 +1,66 @@
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Private keys and certificates
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/
+**/secrets/
+
+# Traefik ACME/TLS state
+acme.json
+**/acme.json
+letsencrypt/acme.json
+**/letsencrypt/acme.json
+
+# Persistent application data
+data/
+**/data/
+config/
+**/config/
+
+# Logs
+logs/
+**/logs/
+*.log
+
+# Databases and database dumps
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.sql.gz
+
+# Backups and archives
+backups/
+**/backups/
+*.bak
+*.backup
+*.tar
+*.tar.gz
+*.zip
+
+# Runtime and temporary files
+tmp/
+**/tmp/
+cache/
+**/cache/
+*.pid
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local Docker overrides
+docker-compose.override.yml
+compose.override.yaml

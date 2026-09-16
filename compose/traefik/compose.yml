@@ -1,0 +1,53 @@
+services:
+  traefik:
+    image: traefik:v3.7.1
+    container_name: traefik
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - proxy
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.network=proxy"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.duckdns.acme.dnschallenge=true"
+      - "--certificatesresolvers.duckdns.acme.dnschallenge.provider=duckdns"
+      - "--certificatesresolvers.duckdns.acme.email=${EMAIL}"
+      - "--certificatesresolvers.duckdns.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
+      - "--certificatesresolvers.duckdns.acme.storage=/letsencrypt/acme.json"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--log.level=INFO"
+      - "--providers.file=true"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt    
+      - ./dynamic:/etc/traefik/dynamic:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=duckdns"
+      - "traefik.http.routers.dashboard.tls.domains[0].main=${DOMAIN}"
+      - "traefik.http.routers.dashboard.tls.domains[0].sans=*.${DOMAIN}"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+      # Authentik forward auth middleware 
+      # This points Traefik to Authentik's Traefik outpost endpoint.
+      - "traefik.http.middlewares.authentik.forwardauth.address=${AUTHENTIK_URL}"
+      - "traefik.http.middlewares.authentik.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.authentik.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-entitlements,X-authentik-email,X-authentik-name,X-authentik-uid"
+
+networks:
+  proxy:
+    external: true
