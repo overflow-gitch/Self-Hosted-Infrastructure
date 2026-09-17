@@ -1,0 +1,75 @@
+services:
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2026.5
+    container_name: authentik-server
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    command: server
+
+    depends_on:
+      - authentik-worker
+
+    volumes:
+      - ./media:/media
+      - ./custom-templates:/templates
+
+    networks:
+      - proxy
+      - data
+
+    labels:
+      - "traefik.enable=true"
+
+      # Router
+      - "traefik.http.routers.authentik.rule=Host(`auth.${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.authentik.entrypoints=websecure"
+      - "traefik.http.routers.authentik.tls=true"
+      - "traefik.http.routers.authentik.tls.certresolver=duckdns"
+
+      # Authentik listens on HTTP 9000 internally
+      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+
+      # Forward HTTPS awareness to authentik
+      - "traefik.http.middlewares.authentik-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.routers.authentik.middlewares=authentik-headers"
+
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2026.5
+    container_name: authentik-worker
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    command: worker
+
+    volumes:
+      - ./media:/media
+      - ./certs:/certs
+      - ./custom-templates:/templates
+
+    networks:
+      - data
+  authentik-ldap:
+    image: ghcr.io/goauthentik/ldap:2026.5
+    container_name: authentik-ldap
+    restart: unless-stopped
+
+    environment:
+      AUTHENTIK_HOST: https://auth.${DUCKDNS_DOMAIN}
+      AUTHENTIK_INSECURE: "false"
+      AUTHENTIK_TOKEN: ${LDAP_OUTPOST_TOKEN}
+
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+
+  data:
+    external: true
