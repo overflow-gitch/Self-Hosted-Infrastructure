@@ -15,7 +15,7 @@ The primary purpose of this homelab is to provide a controlled environment for l
     * [`hardware.md`](docs/hardware.md) -  Description of hardware inventory and deployment strategies. 
     * [`networking.md`](docs/networking.md) - Description of network structure, firewall policies, network infrastrucutre services, and design considerations.
     * [`storage.md`](docs/storage.md) - Description of storage, backups, and network shares.
-
+    * [`services.md`](docs/services.md) - Description of applications, dependencies, and some description on operations.
 ---
 
 ## Design Principles
@@ -63,24 +63,6 @@ The Docker VM was deliberately built as a VM rather than an LXC container, despi
 Data placement follows a deliberate split: the orchestration layer (`/opt/docker/<service>/`, containing compose files and small local config/state) stays on the VM's local disk, while only bulk, non-database data (media libraries, documents, photo originals) is bind-mounted from an NFS export on TrueNAS (`tank/appdata`). This avoids two known failure classes: Docker/Compose depending on a not-yet-mounted network share at boot, and NFS's weaker file-locking semantics causing corruption risk for anything with an embedded database.
 
 **Secrets handling (Traefik `.env`, `acme.json`):** these currently remain local to the Docker VM's disk (`/opt/docker/traefik/`) rather than being relocated to an NFS-backed, TrueNAS-encrypted dataset. This was an explicit decision after evaluating the threat model: Node A's disk is unencrypted, but the realistic threat this would protect against (physical theft/extraction of the drive) already implies a scenario severe enough to also compromise Node B, at which point relocating two small secret files provides negligible additional protection relative to the operational cost (new hard dependency of Docker startup on TrueNAS/NFS availability, weaker guarantees around `acme.json`'s periodic rewrite-on-renewal under NFS locking). Lower-cost, higher-value mitigations were applied instead: restrictive file permissions (`chmod 600`), and moving the DuckDNS API token out of container environment variables (visible via `docker inspect`) into a Compose file-based secret. Token rotation remains available as a fast, low-cost response if compromise is ever suspected.
-
----
-
-## Services
-
-### Currently Running
-
-| Service     | Host              | Description      |
-| ----------- | ----------------- | ---------------  |
-| OPNsense    | Node A            | Router/firewall  |
-| TrueNAS     | Node B            | storage/backup   |
-| docker-host | Node A (guest VM) | Debian 12 + Docker CE, application/container host |
-| Traefik     | docker-host        | Reverse proxy, TLS termination, DuckDNS DNS-01 wildcard cert (Let's Encrypt), Docker-label-driven routing |
-| postgres     | docker-host        | centralized dbms |
-| redis     | docker-host        | centralized redis storage |
-| Authentik     | docker-host        | robust SSO Auth/ID server |
-| monitoring-stack | docker-host | Loki, Promtail, Grafana, Prometheus, and exporters |
-| Other Services     | any (docker preferred)       | Other services running that don't affect design decsions. Unless otherwise constrained, these should run on docker for ease of Creation/Deletion, availability of images and familiarity reasons. |
 
 
 ---
