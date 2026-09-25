@@ -9,10 +9,11 @@ The primary purpose of this homelab is to provide a controlled environment for l
 ---
 
 ## Contents
- * `compose/` - Infrastructure as Code (IaC) in the form of compose files, env examples, and configurations.
- * `docs/` - documentation on various systems, subsystems, design/architectural decisions, and operational procedures.
+ * [`compose/`](compose) - Infrastructure as Code (IaC) in the form of compose files, env examples, and configurations.
+ * [`docs/`](docs) - documentation on various systems, subsystems, design/architectural decisions, and operational procedures.
     * [`architecture.md`](docs/architecture.md) - A high level overview on all subsystems from hardware to services with diagrams.
     * [`hardware.md`](docs/hardware.md) -  Description of hardware inventory and deployment strategies. 
+    * [`networking.md`](docs/networking.md) - Description of network structure, firewall policies, network infrastrucutre services, and design considerations.
 
 ---
 
@@ -61,55 +62,6 @@ The Docker VM was deliberately built as a VM rather than an LXC container, despi
 Data placement follows a deliberate split: the orchestration layer (`/opt/docker/<service>/`, containing compose files and small local config/state) stays on the VM's local disk, while only bulk, non-database data (media libraries, documents, photo originals) is bind-mounted from an NFS export on TrueNAS (`tank/appdata`). This avoids two known failure classes: Docker/Compose depending on a not-yet-mounted network share at boot, and NFS's weaker file-locking semantics causing corruption risk for anything with an embedded database.
 
 **Secrets handling (Traefik `.env`, `acme.json`):** these currently remain local to the Docker VM's disk (`/opt/docker/traefik/`) rather than being relocated to an NFS-backed, TrueNAS-encrypted dataset. This was an explicit decision after evaluating the threat model: Node A's disk is unencrypted, but the realistic threat this would protect against (physical theft/extraction of the drive) already implies a scenario severe enough to also compromise Node B, at which point relocating two small secret files provides negligible additional protection relative to the operational cost (new hard dependency of Docker startup on TrueNAS/NFS availability, weaker guarantees around `acme.json`'s periodic rewrite-on-renewal under NFS locking). Lower-cost, higher-value mitigations were applied instead: restrictive file permissions (`chmod 600`), and moving the DuckDNS API token out of container environment variables (visible via `docker inspect`) into a Compose file-based secret. Token rotation remains available as a fast, low-cost response if compromise is ever suspected.
-
----
-
-## Network Architecture
-
-### OPNsense VM
-
-Role: Edge firewall/router
-
-#### Interfaces
-| Interface       | Purpose                   |
-| --------------- | ------------------------- |
-| WAN             | Internet uplink           |
-| LAN             | Primary trusted network   |
-| Storage         | Dedicated storage network |
-| Host            | Proxmox host management   |
-| Internal Bridge | Virtual networking        |
-
-
-#### OPNsense Services
-
-* DHCP: Dnsmasq DHCP
-* DNS resolver: Unbound DNS
-* VPN: WireGuard 
-* Dynamic DNS: os-ddclient (client plugin), DuckDNS (service)
-
-#### Firewall Policy Summary
-
-* Default deny inbound
-* LAN -> WAN, Storage, allowed
-* Storage -> WAN, LAN allowed
-* WAN Allows for VPN
-* Management -> WAN, LAN allowed
-
-#### Analysis
-This section's architecture is undergoing experimentation and is not considered final, specifically the connection between PVE host and OPNsense.
-
-The decision to virtualize OPNsense is primarily informed by hardware constraints. With the few computers available, it is necessary to have Node A serve as both edge router and general application server, especially since Node B is already a dedicated storage appliance.
-
-WAN and LAN are served by physical Intel I226-V ports passed through directly to OPNsense via PCIe passthrough, not bridged through the host; dedicated interfaces for NAS devices and the PVE host itself are handled separately, and VLAN use is restricted to virtual connections between PVE host and OPNsense as inventory stands.
-
-Core infrastructure services, including DHCP, DNS, VPN, and Dynamic DNS, are consolidated on OPNsense to simplify configuration and management. This creates a single point of failure, but reflects the current scale of the homelab.
-
-Multiple IP subnets are used to logically separate infrastructure, storage, and client services. DHCP, DNS, and firewall policies are configured to allow only the required communication between these networks.
-
-DDNS is necessary to ensure that my services can consistently be reached, despite frequent WAN IP swapping.
-
-Firewall policies follow a default-deny approach with explicit rules permitting only required traffic between networks. Stateful inspection minimizes the number of required rules by allowing established connections to return traffic automatically, keeping the rule set relatively small and easy to audit.
-
 
 ---
 

@@ -107,7 +107,7 @@ flowchart TB
 
 The architecture follows a relatively simple progression:
 
-**Hardware → Infrastructure → Network / Storage → Virtualization → Runtime → Applications**
+**Hardware → Infrastructure → Network / Storage → Runtime → Applications**
 
 Each layer provides the foundation for the layer above it while remaining as independent as practical.
 
