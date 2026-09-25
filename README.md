@@ -4,18 +4,15 @@
 
 This repository documents a modular homelab focused on networking, virtualization, storage, infrastructure and application experimentation. It includes architecture diagrams, configuration decisions, networking layouts, and operational documentation.
 
-The environment is built around a set of core infrastructure components:
-* A Proxmox VE virtualization host running on a Lenovo M920q
-* An OPNsense virtual machine handling routing, firewalling, network segmentation, and other edge services
-* A TrueNAS system (on an Acer TC-220) providing centralized storage via ZFS, and NFS/SMB shares with checksums, snapshots and integrity verification.
-* A Docker App virtual machine handling database management, authentication/identity services, reverse proxies, monitoring and other apps.
-
 The primary purpose of this homelab is to provide a controlled environment for learning/demonstrating systems administration concepts, testing new technologies, and hosting personal services. It is intentionally designed to be modular, allowing components to be reconfigured or expanded over time.
 
 ---
 
-## Repo Architecture
- * `compose/` - Infrastructure as Code (IaC) in the form of compose files, env examples, and configurations. 
+## Contents
+ * `compose/` - Infrastructure as Code (IaC) in the form of compose files, env examples, and configurations.
+ * `docs/` - documentation on various systems, subsystems, design/architectural decisions, and operational procedures.
+    * [`architecture.md`](docs/architecture.md) - A high level overview on all subsystems from hardware to services with diagrams.
+    * [`hardware.md`](docs/hardware.md) -  Description of hardware inventory and deployment strategies. 
 
 ---
 
@@ -25,76 +22,6 @@ The primary purpose of this homelab is to provide a controlled environment for l
 * Use virtualization to maximize hardware utilization
 * Avoid exposing internal services directly to WAN
 * Incrementally improve infrastructure over full redesigns
-
----
-
-## Current Architecture
-
-### High-Level Network Topology
-
-```mermaid
-graph TD
-    Internet --> ISP["ISP Gateway / Router (Double NAT)"]
-
-    ISP <--> OPNsense["OPNsense VM - Routing / Firewall / VPN"]
-
-    OPNsense <--> LAN["LAN Segment - Flat Layer 2"]
-
-    LAN <--> Proxmox["Proxmox VE Host (Lenovo M920q)"]
-    LAN <--> TrueNAS["TrueNAS (Acer TC-220)"]
-    LAN <--> WiredClients["Wired Clients"]
-
-    LAN <--> Docker["Docker Guest (Debian)"]
-
-    ISP --> WiFi["ISP Wireless AP (unconfigurable)"]
-    WiFi --> WirelessClients["Wireless Clients"]
-
-    WirelessClients --> VPN["WireGuard VPN Tunnel via OPNsense"]
-    VPN --> OPNsense
-```
-#### Analysis
-This network design is the result of dealing with several constraints.
-
-The first is a split-network between wired and wireless clients. The ISP's given router and AP are proprietary devices with an extreme lack of transparent options and capabilities that my homelab could rely on, leaving my own homelab without wireless capabilities. Wireless clients remain connected to the ISP-managed network, which is isolated from the homelab LAN. WireGuard provides authenticated access to internal services without exposing them directly to the Internet and also allows secure remote access when away from home.
-
-The second issue is a lack of a managed switch. Without proper VLAN support, all trusted devices reside on a single Layer-2 broadcast domain. This simplifies the current deployment but limits network segmentation, prevents isolation of infrastructure and storage traffic, and reduces flexibility for future expansion.
-
-This architecture prioritizes functionality within existing hardware constraints. These design decisions are temporary and will be revisited as networking hardware is upgraded.
-
-## Hardware Inventory
-
-### Compute/Edge Node
-
-#### Node A: Lenovo M920q (Proxmox VE Host)
-
-* CPU: Intel i5-8500T (6C/6T)
-* RAM: 16GB DDR4
-* Storage: 256GB SSD
-* Network interfaces:
-    * 1x GbE onboard NIC
-    * 4x 2.5GbE PCIe NIC (Intel I226-V), passed through directly to the OPNsense VM via PCIe passthrough
-* Role: virtualization host (PVE)
-
-#### Node B: TC-220 (TrueNAS Node)
-
-* CPU: AMD A10-7800 (4C/4T)
-* RAM: 16GB DDR3
-* Storage configuration:
-    * 80GB SSD (Boot/OS Drive)
-    * 512GB HDD (backup target pool)
-    * 2TB HDD (tank ZFS pool)
-* Network interfaces: 1GbE NIC
-* Role: NAS / file server
-
-#### Analysis
-
-Both nodes are refurbished desktop computers with limited resources. This necessitates a specific separation of roles for computation (CPU + RAM use), networking, and storage.
-
-Node B (TC-220) is a full-size desktop with a case and motherboard that can support up to 4 SATA disk drives, and has far weaker computation capacity compared to Node A. For the expected workload of a storage appliance, Node B is more optimized compared to Node A.
-
-Node A (M920q), being a small-form-factor PC, cannot fit multiple disk drives inside itself, and has much more capable computation performance compared to Node B. Serving as a host for an OPNsense VM on Proxmox VE, it was fitted with a quad-port 2.5GbE PCIe NIC expansion to serve that function, alongside general computation services.
-
-Node A also hosts a second guest VM (the "Docker VM," see Application Layer) alongside OPNsense, reinforcing its role as the general-purpose compute node, with Node B remaining purely storage-focused.
 
 ---
 
