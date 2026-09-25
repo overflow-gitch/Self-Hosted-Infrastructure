@@ -14,6 +14,7 @@ The primary purpose of this homelab is to provide a controlled environment for l
     * [`architecture.md`](docs/architecture.md) - A high level overview on all subsystems from hardware to services with diagrams.
     * [`hardware.md`](docs/hardware.md) -  Description of hardware inventory and deployment strategies. 
     * [`networking.md`](docs/networking.md) - Description of network structure, firewall policies, network infrastrucutre services, and design considerations.
+    * [`storage.md`](docs/storage.md) - Description of storage, backups, and network shares.
 
 ---
 
@@ -65,47 +66,6 @@ Data placement follows a deliberate split: the orchestration layer (`/opt/docker
 
 ---
 
-## Storage Architecture
-
-### TrueNAS (Node B)
-
-* ZFS pools:
-    * `tank` - 2tb single disk (primary data)
-    * `backup` - 1x 512GB single disk (backup target for VM/container backups and configuration exports)
-* Datasets:
-    ```
-    tank
-    └── data
-    └── users
-         ├── user1/
-         └── user2/
-    
-
-    backup
-    ├── config/
-    │   ├── host/           (Proxmox host config exports)
-    │   └── docker/        (per-service config exports, e.g. opnsense/)
-    └── vm-backups/         (flat; Proxmox vzdump target for all VMs/LXCs)
-
-    ```
-* SMB shares:
-  * Personal share(s) - tank/users/*
-  * `config` - for storing backups of configurations and infrastructure-as-code
-* NFS shares:
-  * `data` - for storing data that appplications consume (images, media, documents, code, etc.)
-  * `vm-backups` - for storing proxmox's backup data
-
-#### Analysis
-Due to limited, non-uniform-sized disk drives, redundancy via RAID is untenable for either pool. Since each pool consists of a single disk, the risk of permanent complete data loss exists unless backups/replication are implemented. Both `tank` and `backup` currently rely on ZFS checksums plus snapshots for corruption/mistake protection only; neither protects against physical disk failure.
-
-The `backup` pool is deliberately scoped to VM/container backups and small configuration exports rather than a full replica of `tank`. Since `tank` is expected to exceed 512GB over time, a full mirror of `tank` onto the spare disk is not feasible; user SMB shares (`tank/users/*`) are intentionally excluded from this backup target since client + share already provides a basic two-copy redundancy for that data.
-
-Currently, personal user shares are the main use of the NAS. With the only additional feature besides Snapshots enabled is global ZSTD-3 compression.
-
-While all user datasets are configured as SMB datasets in TrueNAS, only tank/users is shared via SMB. Access to personal datasets/directories is controlled through SMB Access Control Lists (ACL). While reducing the amount of shares was desired for easier maintainability, there exists a hard requirement to be able to track and restrict individual quotas for each individual user, which is not a native feature of SMB. Therefore, each user requires a manual setup with an individual dataset at the ZFS/block level, rather than setting up something like a "home network" scheme.
-
----
-
 ## Services
 
 ### Currently Running
@@ -122,42 +82,6 @@ While all user datasets are configured as SMB datasets in TrueNAS, only tank/use
 | monitoring-stack | docker-host | Loki, Promtail, Grafana, Prometheus, and exporters |
 | Other Services     | any (docker preferred)       | Other services running that don't affect design decsions. Unless otherwise constrained, these should run on docker for ease of Creation/Deletion, availability of images and familiarity reasons. |
 
-
----
-
-## Backup Strategy
-
-### Current State
-
-* TrueNAS snapshots:
-    * `tank/users`: hourly, 1 month retention, recursive on all child datasets
-    * `backup` pool (`vm-backups`, `config`): daily, 2 week retention; protects the backup target itself from an accidental overwrite or bad backup run clobbering the last good copy
-* VM/LXC backups (Proxmox vzdump):
-    * Scheduled backup job configured under Datacenter → Backup on Node A, targeting the `vm-backups` NFS storage (content type: Backup only (no disk images))
-    * Selection mode: all guests except OPNsense (see OPNsense-specific backup below for the reason this guest is excluded)
-    * Mode: Snapshot for guests on `local-lvm`; Suspend/Stop required for any guest still on plain `local`
-    * Compression: zstd
-    * Retention: bounded "keep" settings (rather than unlimited) to stay within the ~200GB quota, since vzdump produces full independent archives per run rather than deduplicated increments
-    * Failure notifications configured (email/webhook) so a failed job doesn't go unnoticed
-* OPNsense-specific backup:
-    * Automated vzdump backups of this VM are disabled. Scheduled backup runs were found to reliably freeze LAN-side connectivity homelab-wide, recoverable only via a full power cycle of Node A; see Virtualization Layer (Guest: OPNsense VM) and Known Issues for the suspected cause.
-    * Backup method: manual, encrypted `config.xml` export via OPNsense's System → Configuration → Backups page, performed whenever a meaningful rule/interface/service change is made, stored in `backup/config/service/opnsense/` via the `config-backup` SMB share
-    * OPNsense's built-in in-GUI configuration history (auto-versioned on every change) serves as a secondary backstop between manual exports
-    * Restore path: fresh OPNsense install, import the exported `config.xml`
-* External backup (offsite): None, explicitly out of scope for now (local-only, budget issues)
-
-#### Analysis
-The current backup posture is a deliberate tiered approach given fixed hardware (no new spending, no offsite target): critical/replaceable-effort data (VM and container state) is protected via scheduled vzdump backups to a dedicated NFS target, while bulk user data (`tank/users`) is intentionally left out of this backup target and instead relies on existing client+share redundancy plus snapshots against accidental deletion.
-
-OPNsense is excluded from automated vzdump jobs. The vzdump job interrupts the router's VM, which causes a network outage and a subsequent job failure. Instead of a VM backup, manual backups of the OPNsense configuration are performed whenever changes are made to the router configuration. This is considered acceptable since a well configured router should not change unless manually intervened and state data such as logs and graphs are to be offloaded to a dedicated monitoring stack.
-
-Fortunately, in the event of OPNsense going down, a simple cable switch from the OPNsense router ports to the ISP router will re-establish networking for the household while restoration is in progress. 
-
-This still leaves several known gaps, accepted as reasonable trade-offs for now:
-* Both `tank` and `backup` are single, non-redundant disks; a physical failure of either is only survivable if the *other* pool happens to hold a relevant copy (e.g. `backup` surviving a `tank` failure preserves VM/container state, but not user share data)
-* Everything remains on-site; there is no protection against fire, theft, or a simultaneous failure affecting both nodes at once
-* Proxmox host-level configuration (as opposed to guest VM/LXC state) is not yet backed up anywhere
-* OPNsense recovery depends on a configuration-only restore to a freshly installed VM rather than a full VM-state restore; this trades away OS-level recovery (installed packages, plugin versions, manual OS-level tweaks) in exchange for avoiding the backup-triggered network outage described above
 
 ---
 
