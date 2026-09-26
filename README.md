@@ -117,24 +117,6 @@ Limitations among certain native clients for services such as Navidrome and Next
 
 ---
 
-## Application Layer
-
-### Docker VM ("docker-host")
-
-See Virtualization Layer for guest specs. Directory convention:
-
-```
-/opt/docker/      
-├── <service>/
-│   ├── compose.yml
-│   └── data/               
-...
-```
-
-Host Access: SSH, key-based only (Ed25519), password auth and root login disabled at `sshd_config` level.
-
----
-
 ## Maintenance
 
 * Update cadence:
