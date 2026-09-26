@@ -47,6 +47,7 @@ tank/
     └── ...
 ```
 
+
 ##### `tank/data`
 
 `data` is the general-purpose application data store.
@@ -89,6 +90,30 @@ Proxmox automatically creates backups at 04:00 for:
 The backup dataset is separate from the primary application and user data stored in `tank`.
 
 The `backup` pool is protected by ZFS snapshots with a 12-hour schedule and two-week retention.
+
+### Code and Repository Storage
+
+The NFS data storage also provides durable storage for infrastructure source and Git repositories.
+
+```text
+code/
+├── repos/       # Forgejo bare Git repositories
+└── source/      # working copies
+```
+
+The Forgejo repositories are stored on NFS because repository history is durable infrastructure data that should survive failure or replacement of the Node A runtime.
+
+Working copies are also stored on NFS so that the source tree remains independent of the local runtime filesystem.
+
+This is intentionally separate from the live deployment tree on Node A:
+
+```text
+NFS:        code/source/     → version-controlled source
+Node A:     /opt/docker/     → active deployment
+```
+
+The NFS copy is therefore not directly used as the runtime configuration directory. Deployment from source to the runtime environment is a separate concern.
+
 
 ## Data Protection
 

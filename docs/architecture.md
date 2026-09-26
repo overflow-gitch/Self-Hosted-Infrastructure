@@ -346,4 +346,45 @@ All services that are not dependencies are under this category.
 
 Applications should use the existing infrastructure where practical rather than introducing duplicate networking, authentication, database, or storage infrastructure for each service.
 
+## Git and Source Management
+
+Infrastructure configuration is managed as version-controlled source through a self-hosted Forgejo instance.
+
+Forgejo is the authoritative repository for infrastructure source. Working copies are maintained on durable NFS storage, while active deployments remain on Node A's local filesystem. This separates source from runtime state and avoids making service availability dependent on NFS availability.
+
+The repository workflow is:
+
+```text
+Working copy
+    │
+    │ git push
+    ▼
+Forgejo
+    │
+    │ optional manual push mirror
+    ▼
+GitHub
+```
+
+Forgejo is the source of truth; GitHub is a downstream public repository. Changes are developed and committed against Forgejo, while publication to GitHub is deliberately controlled through Forgejo's push-mirror mechanism.
+
+The current working-copy and repository layout is:
+
+```text
+/data/code/
+├── repos/
+│   └── <user>/
+│       └── <repository>     # Forgejo bare repository
+└── source/
+    └── <repository>         # Git working copy
+```
+
+The live deployment tree remains separate:
+
+```text
+/opt/docker/                  # Node A runtime/deployment state
+```
+
+This separation allows the version-controlled source to be stored and protected as durable data without making running services depend on the availability of the source repository or NFS.
+
 
