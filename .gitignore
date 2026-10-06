@@ -64,3 +64,6 @@ Thumbs.db
 # Local Docker overrides
 docker-compose.override.yml
 compose.override.yaml
+
+# Private data not appropriate to put in the public repo
+/private/
