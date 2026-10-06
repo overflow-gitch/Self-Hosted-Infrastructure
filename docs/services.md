@@ -16,7 +16,6 @@ The repository generally contains:
 
 ```text
 public-repo/
-
 ├── compose/
 ├── config/
 ├── docs/
@@ -56,6 +55,22 @@ Compose is used because its declarative configuration makes the application envi
 
 Container management and updates are currently performed manually.
 
+### Image Versioning
+
+Container images are version-pinned rather than relying on floating tags such as `latest`.
+
+Each Compose deployment should specify the intended application version explicitly:
+
+```yaml
+image: ghcr.io/example/application:1.2.3
+```
+
+Version pinning makes the infrastructure repository an explicit record of which application versions are intended to be deployed. Updates are therefore deliberate changes to the deployment definition rather than implicit changes caused by an upstream tag moving.
+
+Image digests may be used where stronger reproducibility is required, but normal version tags are the standard approach.
+
+Application updates remain a manual process: the desired version is changed in the relevant Compose definition, the service is redeployed, and the resulting application is verified.
+
 LXC is used as an exception when Docker or a conventional VM cannot provide the required access to hardware or other resources. Jellyfin transcoding is a use case for this decision-making.
 
 ## Configuration, State, and Runtime Data
@@ -80,10 +95,9 @@ The repository describes **how a service is deployed**, while persistent storage
 
 The currently deployed application services are defined in [`/compose`](../compose/).
 
-The Compose directory is the authoritative inventory of Docker-based application deployments. Refer to the individual Compose files for the current services, images, configuration, dependencies, networks, and deployment definitions.
+The Compose directory is the authoritative inventory of Docker-based application deployments. Refer to the individual Compose files for the current services, pinned images, configuration, dependencies, networks, and deployment definitions.
 
 Jellyfin is deployed separately as an LXC rather than through Docker Compose because of its hardware-access requirements.
-
 
 ### Shared Infrastructure Services
 
@@ -103,13 +117,9 @@ Authentik provides centralized authentication where applications can support it.
 
 The current implementation primarily uses Authentik through Traefik forward authentication rather than requiring every application to implement a compatible identity protocol itself.
 
-Not every application uses Authentik. In particular, some applications have limitations that make centralized authentication impractical:
+Not every application uses Authentik. Some applications have client-specific authentication limitations, particularly where mobile or other non-browser clients are involved. Jellyfin also retains its own authentication mechanism because it does not currently provide a suitable authentication integration for the desired setup.
 
-* Apps like Navidrome and Nextcloud has client-specific authentication limitations, particularly for mobile use.
-
-* Apps like Jellyfin does not currently provide a suitable authentication integration for the desired setup.
-
-These applications retain their own authentication mechanisms rather than being forced into the common SSO path.
+Applications therefore retain their own authentication mechanisms where centralized authentication is not compatible with their clients or runtime requirements.
 
 #### PostgreSQL
 
@@ -127,13 +137,7 @@ Like PostgreSQL, Redis is centralized so that compatible applications can use a 
 
 #### Monitoring and Logging
 
-The monitoring environment consists of:
-
-* Grafana
-* Prometheus
-* Loki
-* Promtail
-* Proxmox VE exporter
+The monitoring environment consists of the monitoring and logging services defined in the Compose deployment.
 
 The monitoring stack is intended to provide metrics, dashboards, and centralized logs across the environment.
 
@@ -274,20 +278,13 @@ The infrastructure repository itself is version-controlled independently of appl
 Several parts of the application architecture remain incomplete or imperfect:
 
 * The monitoring and logging stack is deployed but not yet fully functional.
-
 * Vaultwarden is deployed but not currently in active use.
-
 * Some applications cannot participate cleanly in the centralized authentication model.
-
 * The Docker VM is a major shared dependency and therefore a single failure can affect most applications simultaneously.
-
 * Application data permissions across containers and NFS require careful UID/GID handling.
-
 * Application updates are currently performed manually.
-
 * Application-level backup and recovery procedures have not yet been developed independently of the underlying Proxmox and storage backup systems.
-
-* Container image versions are not yet uniformly pinned for maximum deployment reproducibility.
+* Image versions are intentionally pinned, but the update process remains manual.
 
 These are characteristics of the current system rather than requirements for the intended architecture.
 
@@ -304,6 +301,8 @@ The infrastructure repository is treated as the source of truth for service depl
 A single private environment file provides common deployment variables to Compose, while individual services explicitly declare the variables they require. This prevents the environment file from becoming an implicit source of configuration inside every container.
 
 Persistent application state is treated separately from infrastructure definitions. Git describes and versions the deployment; the storage and backup systems preserve the state generated by that deployment.
+
+Container images are version-pinned so that the repository records the intended application versions. Upgrading an application is therefore an explicit infrastructure change rather than an implicit consequence of a floating image tag.
 
 Docker Compose is the normal path for service deployment because it provides a declarative description of each application and its dependencies. LXC is reserved for cases where the normal container environment cannot satisfy the application's hardware or runtime requirements.
 
