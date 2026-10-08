@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_root_password
+    secrets:
+      - postgres_root_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  data:
+    name: data
+    external: true
+
+volumes:
+  postgres_data:
+    external: true
+    name: postgres_postgres_data
+
+secrets:
+  postgres_root_password:
+    file: ${SECRETS_PATH}/postgres_root_password
