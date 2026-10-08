@@ -1,0 +1,74 @@
+services:
+  traefik:
+    image: traefik:v3.7.1
+    container_name: traefik
+    restart: unless-stopped
+    networks:
+      - proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+      - ${PRIVATE_CONFIG_PATH}/traefik:/etc/traefik/dynamic:ro
+    environment:
+      DUCKDNS_TOKEN_FILE: /run/secrets/duckdns_token
+    secrets:
+      - duckdns_token
+    command:
+      # Docker providers
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.network=proxy"
+
+      # Entry points
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+
+      # For certificates and TLS
+      - "--certificatesresolvers.duckdns.acme.dnschallenge=true"
+      - "--certificatesresolvers.duckdns.acme.dnschallenge.provider=duckdns"
+      - "--certificatesresolvers.duckdns.acme.email=${EMAIL}"
+      - "--certificatesresolvers.duckdns.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
+      - "--certificatesresolvers.duckdns.acme.storage=/letsencrypt/acme.json"
+
+      # Logs
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--log.level=INFO"
+
+      # For file-based rules
+      - "--providers.file=true"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=duckdns"
+      - "traefik.http.routers.dashboard.tls.domains[0].main=${DOMAIN}"
+      - "traefik.http.routers.dashboard.tls.domains[0].sans=*.${DOMAIN}"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+      # Authentik forward auth middleware
+      # This points Traefik to Authentik's Traefik outpost endpoint.
+      - "traefik.http.middlewares.authentik.forwardauth.address=${AUTHENTIK_URL}"
+      - "traefik.http.middlewares.authentik.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.authentik.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-entitlements,X-authentik-email,X-authentik-name,X-authentik-uid"
+
+secrets:
+  duckdns_token:
+    file: ${SECRETS_PATH}/duckdns_token
+
+networks:
+  proxy:
+    external: true
+    
+volumes:
+  traefik_letsencrypt:

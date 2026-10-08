@@ -22,8 +22,6 @@ letsencrypt/acme.json
 # Persistent application data
 data/
 **/data/
-config/
-**/config/
 
 # Logs
 logs/

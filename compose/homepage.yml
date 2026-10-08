@@ -6,15 +6,15 @@ services:
     environment:
       HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
       LOG_TARGETS: stdout
+    networks:
+      - proxy
     volumes:
     - ${PRIVATE_CONFIG_PATH}/homepage:/app/config
     - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - proxy
     labels:
       - "traefik.enable=true"
 
-      - "traefik.http.routers.homepage.rule=Host(`home.${HOST}`)"
+      - "traefik.http.routers.homepage.rule=Host(`home.${DOMAIN}`)"
       - "traefik.http.routers.homepage.entrypoints=websecure"
       - "traefik.http.routers.homepage.tls.certresolver=duckdns"
       - "traefik.http.routers.homepage.middlewares=authentik@docker"
