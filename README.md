@@ -16,4 +16,5 @@ The primary purpose of this homelab is to provide a controlled environment for l
     * [`networking.md`](docs/networking.md) - Description of network structure, firewall policies, network infrastrucutre services, and design considerations.
     * [`storage.md`](docs/storage.md) - Description of storage, backups, and network shares.
     * [`services.md`](docs/services.md) - Description of applications, dependencies, and some description on operations.
+* [`scripts/`](scripts) - Contains custom scripts needed for when an application isn't necessary. Ex: automated db dumps
 ---
