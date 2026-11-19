@@ -6,4 +6,6 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/backup-postgres.sh
+User=backup
+Group=backup
+ExecStart=/usr/local/sbin/postgres-backup.sh

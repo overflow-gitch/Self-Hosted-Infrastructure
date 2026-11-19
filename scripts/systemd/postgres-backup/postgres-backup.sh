@@ -27,7 +27,7 @@ fi
 umask 077
 mkdir -p "$POSTGRES_BACKUP_DIR"
 
-TIMESTAMP=$(date -u +"%Y-%m-%d_%H-%M-%S")
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 TEMP_DIR=$(mktemp -d "$POSTGRES_BACKUP_DIR/.tmp-${TIMESTAMP}.XXXXXX")
 FINAL_DIR="$POSTGRES_BACKUP_DIR/$TIMESTAMP"
 
