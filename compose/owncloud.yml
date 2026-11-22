@@ -1,0 +1,69 @@
+services:
+  ocis:
+    image: owncloud/ocis:8.2.3
+    container_name: owncloud
+    restart: unless-stopped
+    user: ${USER_GROUP}
+
+    environment:
+      GRAPH_SPACES_DEFAULT_QUOTA: ${GRAPH_SPACES_DEFAULT_QUOTA}
+      OCIS_URL: https://${OCIS_URL}
+      OCIS_LOG_LEVEL: "info"
+      OCIS_CONFIG_DIR: "/etc/ocis"
+      OCIS_BASE_DATA_PATH: "/var/lib/ocis"
+
+      # External OIDC provider
+      OCIS_OIDC_ISSUER: ${OCIS_OIDC_ISSUER}
+      WEB_OIDC_CLIENT_ID: ${WEB_OIDC_CLIENT_ID}
+      WEB_OIDC_SCOPE: "openid profile email roles"
+
+      # OIDC discovery for native clients
+      PROXY_OIDC_REWRITE_WELLKNOWN: "true"
+
+      # To stop a strange bug with dav and tokens for native clients
+      PROXY_OIDC_ACCESS_TOKEN_VERIFY_METHOD: "none"
+
+      # Something that helps with roles
+      PROXY_ROLE_ASSIGNMENT_DRIVER: "default"
+
+      # External identity provider
+      OCIS_EXCLUDE_RUN_SERVICES: "idp"
+
+      # Automatic user provisioning
+      PROXY_AUTOPROVISION_ACCOUNTS: "true"
+      PROXY_USER_OIDC_CLAIM: "preferred_username"
+      PROXY_AUTOPROVISION_CLAIM_DISPLAYNAME: "preferred_username"
+      PROXY_USER_CS3_CLAIM: "username"
+
+      PROXY_CSP_CONFIG_FILE_LOCATION: "/etc/ocis/csp.yaml"
+
+      # Allow Graph to create users in the internal identity backend
+      GRAPH_LDAP_SERVER_WRITE_ENABLED: "true"
+      
+      PROXY_TLS: "false"
+
+    volumes:
+      - ${OCIS_CONFIG_PATH}:/etc/ocis
+      - ${OCIS_DATA_PATH}:/var/lib/ocis
+
+    networks:
+      - proxy
+
+    labels:
+      - "traefik.enable=true"
+
+      # Router
+      - "traefik.http.routers.owncloud.rule=Host(`${OCIS_URL}`)"
+      - "traefik.http.routers.owncloud.entrypoints=websecure"
+      - "traefik.http.routers.owncloud.tls=true"
+      - "traefik.http.routers.owncloud.tls.certresolver=letsencrypt"
+
+      # Backend
+      - "traefik.http.services.owncloud.loadbalancer.server.port=9200"
+
+    logging:
+      driver: local
+
+networks:
+  proxy:
+    external: true
