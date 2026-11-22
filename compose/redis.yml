@@ -1,0 +1,37 @@
+services:
+  redis:
+    image: redis:7.4.10
+    restart: unless-stopped
+    container_name: redis
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+
+    volumes:
+      - redis_data:/data
+      - ${PUBLIC_CONFIG_PATH}/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+    secrets:
+      - redis_password
+
+    networks:
+      - data
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  data:
+    external: true
+    name: data
+
+volumes:
+  redis_data:
+
+secrets:
+  redis_password:
+    file: ${SECRETS_PATH}/redis_password.txt

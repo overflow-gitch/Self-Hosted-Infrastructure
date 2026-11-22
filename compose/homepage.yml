@@ -17,6 +17,8 @@ services:
       - "traefik.http.routers.homepage.rule=Host(`home.${DOMAIN}`)"
       - "traefik.http.routers.homepage.entrypoints=websecure"
       - "traefik.http.routers.homepage.tls.certresolver=duckdns"
+
+      # Authentik Forward Auth
       - "traefik.http.routers.homepage.middlewares=authentik@docker"
       - "traefik.http.services.homepage.loadbalancer.server.port=3000"
 
